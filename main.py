@@ -36,10 +36,12 @@ def execute_python_code(code: str):
 
 
 def extract_error_lines(traceback_text: str):
-    # Find "line X" patterns
-    lines = re.findall(r'line (\d+)', traceback_text)
-    return list(set(int(num) for num in lines))
+    import re
 
+    # Only capture lines from user code (File "<string>")
+    matches = re.findall(r'File "<string>", line (\d+)', traceback_text)
+
+    return list(set(int(num) for num in matches))
 
 @app.post("/code-interpreter")
 async def run_code(request: CodeRequest):
