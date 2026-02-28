@@ -4,14 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import sys
 from io import StringIO
 import traceback
-import os
-from typing import List
-from google import genai
-from google.genai import types
+import re
 
 app = FastAPI()
 
-# CORS (important for testing)
+# CORS (important)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,12 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request model
 class CodeRequest(BaseModel):
     code: str
 
-# -------- TOOL FUNCTION --------
-def execute_python_code(code: str) -> dict:
+def execute_python_code(code: str):
     old_stdout = sys.stdout
     sys.stdout = StringIO()
 
@@ -39,62 +34,26 @@ def execute_python_code(code: str) -> dict:
     finally:
         sys.stdout = old_stdout
 
-# -------- AI ERROR ANALYSIS --------
-class ErrorAnalysis(BaseModel):
-    error_lines: List[int]
 
-def analyze_error_with_ai(code: str, tb: str) -> List[int]:
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+def extract_error_lines(traceback_text: str):
+    # Find "line X" patterns
+    lines = re.findall(r'line (\d+)', traceback_text)
+    return list(set(int(num) for num in lines))
 
-    prompt = f"""
-Analyze the following Python code and traceback.
-Identify the exact line numbers where the error occurred.
 
-CODE:
-{code}
-
-TRACEBACK:
-{tb}
-
-Return only the line numbers.
-"""
-
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-exp",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "error_lines": types.Schema(
-                        type=types.Type.ARRAY,
-                        items=types.Schema(type=types.Type.INTEGER)
-                    )
-                },
-                required=["error_lines"]
-            )
-        )
-    )
-
-    result = ErrorAnalysis.model_validate_json(response.text)
-    return result.error_lines
-
-# -------- ENDPOINT --------
 @app.post("/code-interpreter")
 async def run_code(request: CodeRequest):
 
     execution = execute_python_code(request.code)
 
-    # If success → no AI needed
     if execution["success"]:
         return {
             "error": [],
             "result": execution["output"]
         }
 
-    # If error → call AI
-    error_lines = analyze_error_with_ai(request.code, execution["output"])
+    # If error → extract line numbers from traceback
+    error_lines = extract_error_lines(execution["output"])
 
     return {
         "error": error_lines,
